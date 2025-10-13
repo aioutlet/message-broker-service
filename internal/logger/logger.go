@@ -23,13 +23,21 @@ func New(level, format string) (*Logger, error) {
 	if format == "json" {
 		zapConfig = zap.NewProductionConfig()
 	} else {
-		zapConfig = zap.NewDevelopmentConfig()
+		// Use production config as base for better console formatting
+		zapConfig = zap.NewProductionConfig()
+		zapConfig.Encoding = "console"
 		zapConfig.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		zapConfig.EncoderConfig.EncodeTime = zapcore.RFC3339TimeEncoder
+		zapConfig.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+		zapConfig.EncoderConfig.ConsoleSeparator = " "
+		zapConfig.Development = false
+		zapConfig.DisableStacktrace = true
 	}
 
 	zapConfig.Level = zap.NewAtomicLevelAt(zapLevel)
 	zapConfig.EncoderConfig.TimeKey = "timestamp"
-	zapConfig.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	zapConfig.OutputPaths = []string{"stdout"}
+	zapConfig.ErrorOutputPaths = []string{"stderr"}
 
 	logger, err := zapConfig.Build()
 	if err != nil {
