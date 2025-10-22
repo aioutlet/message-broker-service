@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -93,6 +94,17 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 	// Get service name from header or use default
 	serviceName := c.Get("X-Service-Name", "unknown")
 
+	// Debug: Log incoming request details  
+	correlationHeader := h.config.Observability.CorrelationIDHeader
+	h.log.Infof("📨 Incoming publish request: topic=%s | correlationIdFromRequest=%s | xRequestId=%s | correlationFromHeader=%s | serviceName=%s | correlationHeader=%s",
+		req.Topic,
+		req.CorrelationID,
+		c.Get("X-Request-ID"),
+		c.Get(correlationHeader),
+		serviceName,
+		correlationHeader,
+	)
+
 	// Create message
 	message := models.NewMessage(req.Topic, req.Data, serviceName)
 	message.CorrelationID = req.CorrelationID
@@ -103,13 +115,28 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		message.CorrelationID = c.Get("X-Request-ID", "")
 	}
 
+	// Try configured correlation ID header
+	if message.CorrelationID == "" {
+		message.CorrelationID = c.Get(correlationHeader, "")
+	}
+
+	// Final fallback - extract from event data
+	if message.CorrelationID == "" {
+		if metadata, ok := req.Data["metadata"].(map[string]interface{}); ok {
+			if corrId, ok := metadata["correlationId"].(string); ok {
+				message.CorrelationID = corrId
+			}
+		}
+	}
+
 	// Publish message
 	ctx := c.Context()
 	if err := h.broker.Publish(ctx, message); err != nil {
-		h.log.Error("Failed to publish message",
-			"error", err,
-			"topic", req.Topic,
-			"messageId", message.ID,
+		h.log.Errorf("Failed to publish message: error=%s | topic=%s | messageId=%s | correlationId=%s",
+			err.Error(),
+			req.Topic,
+			message.ID,
+			message.CorrelationID,
 		)
 
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
@@ -119,10 +146,13 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		})
 	}
 
-	h.log.Info("Message published successfully",
-		"messageId", message.ID,
-		"topic", req.Topic,
-		"source", serviceName,
+	h.log.Infof("✅ Message published to broker: messageId=%s | topic=%s | source=%s | correlationId=%s | eventType=%v | dataSize=%d",
+		message.ID,
+		req.Topic,
+		serviceName,
+		message.CorrelationID,
+		message.Data["eventType"],
+		len(fmt.Sprintf("%v", req.Data)),
 	)
 
 	// Return response

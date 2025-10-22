@@ -19,27 +19,40 @@ func New(level, format string) (*Logger, error) {
 		return nil, fmt.Errorf("invalid log level: %s", level)
 	}
 
-	var zapConfig zap.Config
+	var logger *zap.Logger
+	var err error
+
 	if format == "json" {
-		zapConfig = zap.NewProductionConfig()
+		// JSON format for production
+		config := zap.NewProductionConfig()
+		config.Level = zap.NewAtomicLevelAt(zapLevel)
+		logger, err = config.Build()
 	} else {
-		// Use production config as base for better console formatting
-		zapConfig = zap.NewProductionConfig()
-		zapConfig.Encoding = "console"
-		zapConfig.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		zapConfig.EncoderConfig.EncodeTime = zapcore.RFC3339TimeEncoder
-		zapConfig.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
-		zapConfig.EncoderConfig.ConsoleSeparator = " "
-		zapConfig.Development = false
-		zapConfig.DisableStacktrace = true
+		// Console format with better readability
+		config := zap.Config{
+			Level:       zap.NewAtomicLevelAt(zapLevel),
+			Development: true,
+			Encoding:    "console",
+			EncoderConfig: zapcore.EncoderConfig{
+				TimeKey:        "ts",
+				LevelKey:       "level",
+				NameKey:        "logger",
+				CallerKey:      "caller",
+				FunctionKey:    zapcore.OmitKey,
+				MessageKey:     "msg",
+				StacktraceKey:  "stacktrace",
+				LineEnding:     zapcore.DefaultLineEnding,
+				EncodeLevel:    zapcore.CapitalColorLevelEncoder,
+				EncodeTime:     zapcore.RFC3339TimeEncoder,
+				EncodeDuration: zapcore.SecondsDurationEncoder,
+				EncodeCaller:   zapcore.ShortCallerEncoder,
+			},
+			OutputPaths:      []string{"stdout"},
+			ErrorOutputPaths: []string{"stderr"},
+		}
+		logger, err = config.Build()
 	}
 
-	zapConfig.Level = zap.NewAtomicLevelAt(zapLevel)
-	zapConfig.EncoderConfig.TimeKey = "timestamp"
-	zapConfig.OutputPaths = []string{"stdout"}
-	zapConfig.ErrorOutputPaths = []string{"stderr"}
-
-	logger, err := zapConfig.Build()
 	if err != nil {
 		return nil, err
 	}

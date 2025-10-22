@@ -19,14 +19,20 @@ func Logger(log *logger.Logger) fiber.Handler {
 		// Log request
 		duration := time.Since(start)
 		status := c.Response().StatusCode()
+		requestId := c.Get("X-Request-ID")
 
-		log.Info("HTTP request",
-			"method", c.Method(),
-			"path", c.Path(),
-			"status", status,
-			"duration", duration.String(),
-			"ip", c.IP(),
-			"requestId", c.Get("X-Request-ID"),
+		if requestId == "" {
+			requestId = "none"
+		}
+
+		log.Infof("🌐 HTTP Request: method=%s | path=%s | status=%d | duration=%s | ip=%s | requestId=%s | userAgent=%s",
+			c.Method(),
+			c.Path(),
+			status,
+			duration.String(),
+			c.IP(),
+			requestId,
+			c.Get("User-Agent"),
 		)
 
 		return err

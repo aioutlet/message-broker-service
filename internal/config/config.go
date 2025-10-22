@@ -17,6 +17,7 @@ type Config struct {
 	API             APIConfig
 	RateLimit       RateLimitConfig
 	Log             LogConfig
+	Observability   ObservabilityConfig
 	HealthCheck     HealthCheckConfig
 	ShutdownTimeout time.Duration
 }
@@ -81,6 +82,13 @@ type HealthCheckConfig struct {
 	Interval time.Duration
 }
 
+// ObservabilityConfig holds observability configuration
+type ObservabilityConfig struct {
+	EnableTracing           bool
+	OTLPExporterEndpoint   string
+	CorrelationIDHeader    string
+}
+
 // Load loads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
@@ -121,6 +129,11 @@ func Load() (*Config, error) {
 		},
 		HealthCheck: HealthCheckConfig{
 			Interval: getEnvDuration("HEALTH_CHECK_INTERVAL", 30*time.Second),
+		},
+		Observability: ObservabilityConfig{
+			EnableTracing:        getEnvBool("ENABLE_TRACING", false),
+			OTLPExporterEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			CorrelationIDHeader:  getEnv("CORRELATION_ID_HEADER", "x-correlation-id"),
 		},
 		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
 	}
