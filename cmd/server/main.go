@@ -6,30 +6,57 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/aioutlet/message-broker-service/internal/config"
+	"github.com/aioutlet/message-broker-service/internal/health"
 	"github.com/aioutlet/message-broker-service/internal/logger"
 	"github.com/aioutlet/message-broker-service/internal/server"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load environment variables
+	// Industry-standard initialization pattern:
+	// 1. Load environment variables
+	// 2. Validate configuration (blocking - must pass)
+	// 3. Check dependency health (wait for completion)
+	// 4. Initialize observability (logger)
+	// 5. Start application
+
+	// Step 1: Load environment variables
+	fmt.Println("Step 1: Loading environment variables...")
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("Warning: .env file not found, using system environment variables")
 	}
 
-	// Load configuration
+	// Step 2: Load and validate configuration (includes validation)
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("Failed to load configuration: %v\n", err)
+		fmt.Printf("❌ Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Initialize logger
+	// Step 3: Check dependency health
+	fmt.Println("Step 3: Checking dependency health...")
+	healthChecker := health.NewDependencyChecker(cfg)
+	healthCtx, healthCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	results := healthChecker.CheckDependencies(healthCtx)
+	healthCancel()
+
+	// Log dependency health results but don't block startup
+	unhealthyCount := 0
+	for _, result := range results {
+		if result.Status != "healthy" {
+			unhealthyCount++
+			fmt.Printf("[DEPS] ⚠️ %s is %s: %s\n", result.Service, result.Status, result.Error)
+		}
+	}
+
+	// Step 4: Initialize observability (logger)
+	fmt.Println("Step 4: Initializing observability...")
 	log, err := logger.New(cfg.Log.Level, cfg.Log.Format)
 	if err != nil {
-		fmt.Printf("Failed to initialize logger: %v\n", err)
+		fmt.Printf("❌ Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer log.Sync()
@@ -38,8 +65,12 @@ func main() {
 		"version", "1.0.0",
 		"environment", cfg.Environment,
 		"brokerType", cfg.Broker.Type,
+		"dependenciesHealthy", len(results)-unhealthyCount,
+		"dependenciesTotal", len(results),
 	)
 
+	// Step 5: Start the application
+	fmt.Println("Step 5: Starting message broker service...")
 	// Create server
 	srv, err := server.New(cfg, log)
 	if err != nil {

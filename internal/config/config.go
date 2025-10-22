@@ -135,15 +135,37 @@ func Load() (*Config, error) {
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
-	// Validate broker type
-	validBrokers := map[string]bool{
-		"rabbitmq":          true,
-		"kafka":             true,
-		"azure-servicebus":  true,
+	fmt.Println("Step 2: Validating configuration...")
+
+	// Validate service name
+	if c.ServiceName == "" {
+		return fmt.Errorf("SERVICE_NAME must be a non-empty string")
 	}
 
+	// Validate port
+	if c.Port == "" {
+		return fmt.Errorf("PORT must be specified")
+	}
+
+	// Validate environment
+	validEnvironments := map[string]bool{
+		"development": true,
+		"staging":     true,
+		"production":  true,
+		"test":        true,
+	}
+	if !validEnvironments[c.Environment] {
+		return fmt.Errorf("ENVIRONMENT must be one of: development, staging, production, test")
+	}
+
+	// Validate broker type
+	validBrokers := map[string]bool{
+		"rabbitmq":         true,
+		"kafka":            true,
+		"azure-servicebus": true,
+	}
 	if !validBrokers[c.Broker.Type] {
-		return fmt.Errorf("invalid MESSAGE_BROKER_TYPE: %s (must be: rabbitmq, kafka, or azure-servicebus)", c.Broker.Type)
+		return fmt.Errorf("MESSAGE_BROKER_TYPE must be one of: rabbitmq, kafka, azure-servicebus")
 	}
 
 	// Validate broker-specific configuration
@@ -152,16 +174,74 @@ func (c *Config) Validate() error {
 		if c.Broker.RabbitMQ.URL == "" {
 			return fmt.Errorf("RABBITMQ_URL is required when MESSAGE_BROKER_TYPE=rabbitmq")
 		}
+		if c.Broker.RabbitMQ.Exchange == "" {
+			return fmt.Errorf("RABBITMQ_EXCHANGE is required when MESSAGE_BROKER_TYPE=rabbitmq")
+		}
+		validExchangeTypes := map[string]bool{
+			"direct": true,
+			"topic":  true,
+			"fanout": true,
+			"headers": true,
+		}
+		if !validExchangeTypes[c.Broker.RabbitMQ.ExchangeType] {
+			return fmt.Errorf("RABBITMQ_EXCHANGE_TYPE must be one of: direct, topic, fanout, headers")
+		}
 	case "kafka":
 		if len(c.Broker.Kafka.Brokers) == 0 {
 			return fmt.Errorf("KAFKA_BROKERS is required when MESSAGE_BROKER_TYPE=kafka")
+		}
+		if c.Broker.Kafka.Topic == "" {
+			return fmt.Errorf("KAFKA_TOPIC is required when MESSAGE_BROKER_TYPE=kafka")
+		}
+		if c.Broker.Kafka.GroupID == "" {
+			return fmt.Errorf("KAFKA_GROUP_ID is required when MESSAGE_BROKER_TYPE=kafka")
 		}
 	case "azure-servicebus":
 		if c.Broker.AzureServiceBus.ConnectionString == "" {
 			return fmt.Errorf("AZURE_SERVICE_BUS_CONNECTION_STRING is required when MESSAGE_BROKER_TYPE=azure-servicebus")
 		}
+		if c.Broker.AzureServiceBus.Topic == "" {
+			return fmt.Errorf("AZURE_SERVICE_BUS_TOPIC is required when MESSAGE_BROKER_TYPE=azure-servicebus")
+		}
 	}
 
+	// Validate API configuration
+	if c.API.Key == "" {
+		return fmt.Errorf("API_KEY is required for service authentication")
+	}
+
+	// Validate log level
+	validLogLevels := map[string]bool{
+		"debug": true,
+		"info":  true,
+		"warn":  true,
+		"error": true,
+		"fatal": true,
+	}
+	if !validLogLevels[c.Log.Level] {
+		return fmt.Errorf("LOG_LEVEL must be one of: debug, info, warn, error, fatal")
+	}
+
+	// Validate log format
+	validLogFormats := map[string]bool{
+		"json":    true,
+		"console": true,
+	}
+	if !validLogFormats[c.Log.Format] {
+		return fmt.Errorf("LOG_FORMAT must be one of: json, console")
+	}
+
+	// Validate rate limiting configuration
+	if c.RateLimit.Enabled {
+		if c.RateLimit.RequestsPerSecond <= 0 {
+			return fmt.Errorf("RATE_LIMIT_REQUESTS_PER_SECOND must be greater than 0 when rate limiting is enabled")
+		}
+		if c.RateLimit.Burst <= 0 {
+			return fmt.Errorf("RATE_LIMIT_BURST must be greater than 0 when rate limiting is enabled")
+		}
+	}
+
+	fmt.Printf("✅ Configuration validation completed successfully\n")
 	return nil
 }
 

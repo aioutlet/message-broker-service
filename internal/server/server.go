@@ -132,11 +132,14 @@ func setupMiddleware(app *fiber.App, cfg *config.Config, log *logger.Logger) {
 
 // setupRoutes configures all routes
 func setupRoutes(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
+	// Root health endpoint for standardized dependency checking
+	app.Get("/health", h.Health)
+
 	// API v1 routes
 	api := app.Group("/api/v1")
 
 	// Public routes
-	api.Get("/health", h.Health)
+	api.Get("/health", h.Health) // Keep for API consistency
 	api.Get("/", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"service": cfg.ServiceName,
