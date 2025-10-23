@@ -84,7 +84,7 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 	)
 	defer span.End()
 
-	// Parse request
+	// Parse request (PublishRequest is alias for Message)
 	var req models.PublishRequest
 	if err := c.BodyParser(&req); err != nil {
 		span.RecordError(err)
@@ -96,21 +96,22 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		})
 	}
 
-	// Add request attributes to span
-	span.SetAttributes(
-		attribute.String("message.topic", req.Topic),
-		attribute.String("message.correlation_id", req.CorrelationID),
-		attribute.Int("message.priority", req.Priority),
-		attribute.Int("message.data_size", len(fmt.Sprintf("%v", req.Data))),
-	)
-
-	// Validate request
-	if req.Topic == "" {
-		span.SetStatus(codes.Error, "missing topic")
+	// Validate required AWS EventBridge fields
+	if req.EventType == "" {
+		span.SetStatus(codes.Error, "missing eventType")
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{
 			Success: false,
-			Error:   "topic is required",
-			Code:    "MISSING_TOPIC",
+			Error:   "eventType is required",
+			Code:    "MISSING_EVENT_TYPE",
+		})
+	}
+
+	if req.Source == "" {
+		span.SetStatus(codes.Error, "missing source")
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{
+			Success: false,
+			Error:   "source is required",
+			Code:    "MISSING_SOURCE",
 		})
 	}
 
@@ -123,25 +124,41 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get service name from header or use default
-	serviceName := c.Get("X-Service-Name", "unknown")
-	span.SetAttributes(attribute.String("source.service", serviceName))
+	// Generate broker-specific ID for this message
+	req.ID = ""  // Will be set by NewMessage
+	message := models.NewMessage(
+		req.Source,
+		req.EventType,
+		req.EventVersion,
+		req.EventID,
+		req.Timestamp.Format(time.RFC3339),
+		req.Data,
+		req.Metadata,
+	)
+	message.CorrelationID = req.CorrelationID
+	message.Priority = req.Priority
+
+	// Add request attributes to span
+	span.SetAttributes(
+		attribute.String("message.event_type", message.EventType),
+		attribute.String("message.source", message.Source),
+		attribute.String("message.event_version", message.EventVersion),
+		attribute.String("message.event_id", message.EventID),
+		attribute.String("message.correlation_id", message.CorrelationID),
+		attribute.Int("message.priority", message.Priority),
+		attribute.Int("message.data_size", len(fmt.Sprintf("%v", message.Data))),
+	)
 
 	// Debug: Log incoming request details  
 	correlationHeader := h.config.Observability.CorrelationIDHeader
-	h.log.Infof("📨 Incoming publish request: topic=%s | correlationIdFromRequest=%s | xRequestId=%s | correlationFromHeader=%s | serviceName=%s | correlationHeader=%s",
-		req.Topic,
-		req.CorrelationID,
+	h.log.Infof("📨 Incoming publish request: eventType=%s | source=%s | version=%s | correlationId=%s | xRequestId=%s | correlationFromHeader=%s",
+		message.EventType,
+		message.Source,
+		message.EventVersion,
+		message.CorrelationID,
 		c.Get("X-Request-ID"),
 		c.Get(correlationHeader),
-		serviceName,
-		correlationHeader,
 	)
-
-	// Create message
-	message := models.NewMessage(req.Topic, req.Data, serviceName)
-	message.CorrelationID = req.CorrelationID
-	message.Metadata.Priority = req.Priority
 
 	// Add request ID as correlation ID if not provided
 	if message.CorrelationID == "" {
@@ -151,15 +168,6 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 	// Try configured correlation ID header
 	if message.CorrelationID == "" {
 		message.CorrelationID = c.Get(correlationHeader, "")
-	}
-
-	// Final fallback - extract from event data
-	if message.CorrelationID == "" {
-		if metadata, ok := req.Data["metadata"].(map[string]interface{}); ok {
-			if corrId, ok := metadata["correlationId"].(string); ok {
-				message.CorrelationID = corrId
-			}
-		}
 	}
 
 	// Inject trace context into message headers for downstream propagation
@@ -180,9 +188,9 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to publish message")
 		
-		h.log.Errorf("Failed to publish message: error=%s | topic=%s | messageId=%s | correlationId=%s",
+		h.log.Errorf("Failed to publish message: error=%s | eventType=%s | messageId=%s | correlationId=%s",
 			err.Error(),
-			req.Topic,
+			message.EventType,
 			message.ID,
 			message.CorrelationID,
 		)
@@ -197,20 +205,20 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 	// Mark span as successful
 	span.SetStatus(codes.Ok, "message published successfully")
 
-	h.log.Infof("✅ Message published to broker: messageId=%s | topic=%s | source=%s | correlationId=%s | eventType=%v | dataSize=%d",
+	h.log.Infof("✅ Message published to broker: messageId=%s | eventType=%s | source=%s | version=%s | correlationId=%s | dataSize=%d",
 		message.ID,
-		req.Topic,
-		serviceName,
+		message.EventType,
+		message.Source,
+		message.EventVersion,
 		message.CorrelationID,
-		message.Data["eventType"],
-		len(fmt.Sprintf("%v", req.Data)),
+		len(fmt.Sprintf("%v", message.Data)),
 	)
 
 	// Return response
 	return c.JSON(models.PublishResponse{
 		Success:   true,
 		MessageID: message.ID,
-		Topic:     req.Topic,
+		EventType: message.EventType,
 		Timestamp: message.Timestamp,
 	})
 }

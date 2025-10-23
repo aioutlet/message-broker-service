@@ -121,11 +121,13 @@ func (a *AzureServiceBusAdapter) Publish(ctx context.Context, message *models.Me
 	}
 
 	// Create Service Bus message
+	routingKey := message.GetRoutingKey()
+	contentType := "application/json"
 	sbMsg := &azservicebus.Message{
 		Body:        body,
-		ContentType: &message.Metadata.ContentType,
+		ContentType: &contentType,
 		MessageID:   &message.ID,
-		Subject:     &message.Topic, // Use Subject for routing
+		Subject:     &routingKey, // Use Subject for routing
 	}
 
 	// Add correlation ID if present
@@ -137,8 +139,12 @@ func (a *AzureServiceBusAdapter) Publish(ctx context.Context, message *models.Me
 	if sbMsg.ApplicationProperties == nil {
 		sbMsg.ApplicationProperties = make(map[string]interface{})
 	}
-	sbMsg.ApplicationProperties["source"] = message.Metadata.Source
-	for k, v := range message.Metadata.Headers {
+	sbMsg.ApplicationProperties["source"] = message.Source
+	sbMsg.ApplicationProperties["eventType"] = message.EventType
+	sbMsg.ApplicationProperties["eventVersion"] = message.EventVersion
+	
+	// Add trace headers
+	for k, v := range message.TraceHeaders {
 		sbMsg.ApplicationProperties[k] = v
 	}
 
@@ -152,7 +158,7 @@ func (a *AzureServiceBusAdapter) Publish(ctx context.Context, message *models.Me
 	a.updateStats(true)
 	a.log.Debug("Message published",
 		"messageId", message.ID,
-		"topic", message.Topic,
+		"eventType", message.EventType,
 	)
 
 	return nil

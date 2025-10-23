@@ -122,8 +122,10 @@ func (k *KafkaAdapter) Publish(ctx context.Context, message *models.Message) err
 	// Prepare headers
 	headers := []kafka.Header{
 		{Key: "id", Value: []byte(message.ID)},
-		{Key: "source", Value: []byte(message.Metadata.Source)},
-		{Key: "content-type", Value: []byte(message.Metadata.ContentType)},
+		{Key: "source", Value: []byte(message.Source)},
+		{Key: "eventType", Value: []byte(message.EventType)},
+		{Key: "eventVersion", Value: []byte(message.EventVersion)},
+		{Key: "content-type", Value: []byte("application/json")},
 	}
 
 	if message.CorrelationID != "" {
@@ -133,8 +135,8 @@ func (k *KafkaAdapter) Publish(ctx context.Context, message *models.Message) err
 		})
 	}
 
-	// Add custom headers
-	for k, v := range message.Metadata.Headers {
+	// Add trace headers
+	for k, v := range message.TraceHeaders {
 		headers = append(headers, kafka.Header{
 			Key:   k,
 			Value: []byte(v),
@@ -143,7 +145,7 @@ func (k *KafkaAdapter) Publish(ctx context.Context, message *models.Message) err
 
 	// Create Kafka message
 	kafkaMsg := kafka.Message{
-		Key:     []byte(message.Topic), // Use topic as key for partitioning
+		Key:     []byte(message.GetRoutingKey()), // Use eventType as key for partitioning
 		Value:   body,
 		Headers: headers,
 		Time:    message.Timestamp,
@@ -159,7 +161,7 @@ func (k *KafkaAdapter) Publish(ctx context.Context, message *models.Message) err
 	k.updateStats(true)
 	k.log.Debug("Message published",
 		"messageId", message.ID,
-		"topic", message.Topic,
+		"eventType", message.EventType,
 	)
 
 	return nil

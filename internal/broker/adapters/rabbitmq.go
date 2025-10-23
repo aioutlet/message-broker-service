@@ -131,9 +131,9 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 		trace.WithSpanKind(trace.SpanKindProducer),
 		trace.WithAttributes(
 			attribute.String("messaging.system", "rabbitmq"),
-			attribute.String("messaging.destination", message.Topic),
+			attribute.String("messaging.destination", message.EventType),
 			attribute.String("messaging.destination_kind", "topic"),
-			attribute.String("messaging.rabbitmq.routing_key", message.Topic),
+			attribute.String("messaging.rabbitmq.routing_key", message.EventType),
 			attribute.String("message.id", message.ID),
 			attribute.String("message.correlation_id", message.CorrelationID),
 		),
@@ -179,8 +179,13 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 		DeliveryMode: amqp.Persistent, // Make message persistent
 		Timestamp:    message.Timestamp,
 		MessageId:    message.ID,
-		Priority:     uint8(message.Metadata.Priority),
-		Headers:      amqp.Table{},
+		Priority:     uint8(message.Priority),
+		Headers:      amqp.Table{
+			"source":       message.Source,
+			"eventType":    message.EventType,
+			"eventVersion": message.EventVersion,
+			"eventId":      message.EventID,
+		},
 	}
 
 	// Add correlation ID if present
@@ -188,8 +193,8 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 		publishing.CorrelationId = message.CorrelationID
 	}
 
-	// Add custom headers including trace context
-	for k, v := range message.Metadata.Headers {
+	// Add trace headers
+	for k, v := range message.TraceHeaders {
 		publishing.Headers[k] = v
 	}
 
@@ -200,7 +205,7 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 	err = channel.PublishWithContext(
 		ctx,
 		r.config.Exchange, // exchange
-		message.Topic,     // routing key
+		message.GetRoutingKey(), // routing key
 		false,             // mandatory
 		false,             // immediate
 		publishing,
@@ -223,7 +228,7 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 	r.updateStats(true)
 	r.log.Debug("Message published to RabbitMQ",
 		"messageId", message.ID,
-		"topic", message.Topic,
+		"eventType", message.EventType,
 		"exchange", r.config.Exchange,
 		"correlationId", message.CorrelationID,
 	)

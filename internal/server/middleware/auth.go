@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"strings"
-
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/aioutlet/message-broker-service/internal/models"
@@ -16,21 +14,15 @@ func Auth(apiKey string) fiber.Handler {
 			return c.Next()
 		}
 
-		// Get authorization header
-		auth := c.Get("Authorization")
-		if auth == "" {
+		// Check X-API-Key header (standard for API keys)
+		token := c.Get("X-API-Key")
+		
+		if token == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
 				Success: false,
-				Error:   "missing authorization header",
+				Error:   "missing X-API-Key header",
 				Code:    "UNAUTHORIZED",
 			})
-		}
-
-		// Extract token
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if token == auth {
-			// Try API-Key header as alternative
-			token = c.Get("X-API-Key")
 		}
 
 		// Validate token

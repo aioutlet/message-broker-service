@@ -91,10 +91,10 @@ func (m *Manager) Publish(ctx context.Context, message *models.Message) error {
 		trace.WithSpanKind(trace.SpanKindProducer),
 		trace.WithAttributes(
 			attribute.String("messaging.system", m.config.Type),
-			attribute.String("messaging.destination", message.Topic),
+			attribute.String("messaging.destination", message.GetRoutingKey()),
 			attribute.String("message.id", message.ID),
 			attribute.String("message.correlation_id", message.CorrelationID),
-			attribute.String("message.source", message.Metadata.Source),
+			attribute.String("message.source", message.Source),
 		),
 	)
 	defer span.End()
@@ -102,7 +102,7 @@ func (m *Manager) Publish(ctx context.Context, message *models.Message) error {
 	// Log the publish operation
 	m.log.Info("Publishing message to broker",
 		"broker_type", m.config.Type,
-		"topic", message.Topic,
+		"eventType", message.EventType,
 		"message_id", message.ID,
 		"correlation_id", message.CorrelationID,
 	)
@@ -114,7 +114,7 @@ func (m *Manager) Publish(ctx context.Context, message *models.Message) error {
 		m.log.Error("Failed to publish message",
 			"error", err,
 			"broker_type", m.config.Type,
-			"topic", message.Topic,
+			"eventType", message.EventType,
 			"message_id", message.ID,
 		)
 		return fmt.Errorf("failed to publish message: %w", err)
@@ -123,7 +123,7 @@ func (m *Manager) Publish(ctx context.Context, message *models.Message) error {
 	span.SetStatus(codes.Ok, "message published successfully")
 	m.log.Info("Message published successfully",
 		"broker_type", m.config.Type,
-		"topic", message.Topic,
+		"eventType", message.EventType,
 		"message_id", message.ID,
 	)
 

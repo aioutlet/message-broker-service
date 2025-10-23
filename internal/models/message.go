@@ -7,64 +7,84 @@ import (
 	"github.com/google/uuid"
 )
 
-// Message represents a message to be published or consumed
+// Message represents an AWS EventBridge-style event message
 type Message struct {
-	ID            string                 `json:"id"`
-	Topic         string                 `json:"topic"`
-	Data          map[string]interface{} `json:"data"`
-	Metadata      MessageMetadata        `json:"metadata"`
-	Timestamp     time.Time              `json:"timestamp"`
-	CorrelationID string                 `json:"correlationId,omitempty"`
+	// AWS EventBridge standard fields
+	ID            string                 `json:"id"`            // Message broker generated ID
+	Source        string                 `json:"source"`        // Service that generated the event
+	EventType     string                 `json:"eventType"`     // Type of event (used as routing key)
+	EventVersion  string                 `json:"eventVersion"`  // Schema version
+	EventID       string                 `json:"eventId"`       // Event-specific unique identifier
+	Timestamp     time.Time              `json:"timestamp"`     // When event occurred
+	CorrelationID string                 `json:"correlationId,omitempty"` // Request tracing
+	Data          map[string]interface{} `json:"data"`          // Business data
+	Metadata      map[string]interface{} `json:"metadata"`      // Additional context
+	
+	// Message broker specific fields
+	Priority      int               `json:"priority,omitempty"`      // Message priority
+	TraceHeaders  map[string]string `json:"traceHeaders,omitempty"`  // OpenTelemetry headers
 }
 
-// MessageMetadata contains metadata about the message
-type MessageMetadata struct {
-	Source      string            `json:"source"`
-	ContentType string            `json:"contentType"`
-	Priority    int               `json:"priority,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
-}
-
-// NewMessage creates a new message with generated ID and timestamp
-func NewMessage(topic string, data map[string]interface{}, source string) *Message {
+// NewMessage creates a new message from a publish request
+func NewMessage(source, eventType, eventVersion, eventId, timestamp string, data, metadata map[string]interface{}) *Message {
+	now := time.Now().UTC()
+	
+	// Parse timestamp if provided, otherwise use current time
+	var ts time.Time
+	if timestamp != "" {
+		parsed, err := time.Parse(time.RFC3339, timestamp)
+		if err == nil {
+			ts = parsed
+		} else {
+			ts = now
+		}
+	} else {
+		ts = now
+	}
+	
 	return &Message{
-		ID:        uuid.New().String(),
-		Topic:     topic,
-		Data:      data,
-		Timestamp: time.Now().UTC(),
-		Metadata: MessageMetadata{
-			Source:      source,
-			ContentType: "application/json",
-			Headers:     make(map[string]string),
-		},
+		ID:           uuid.New().String(),
+		Source:       source,
+		EventType:    eventType,
+		EventVersion: eventVersion,
+		EventID:      eventId,
+		Timestamp:    ts,
+		Data:         data,
+		Metadata:     metadata,
+		TraceHeaders: make(map[string]string),
 	}
 }
 
 // SetTraceHeaders sets OpenTelemetry trace context headers
 func (m *Message) SetTraceHeaders(traceHeaders map[string]string) {
-	if m.Metadata.Headers == nil {
-		m.Metadata.Headers = make(map[string]string)
+	if m.TraceHeaders == nil {
+		m.TraceHeaders = make(map[string]string)
 	}
 	
 	for key, value := range traceHeaders {
-		m.Metadata.Headers[key] = value
+		m.TraceHeaders[key] = value
 	}
 }
 
 // GetTraceHeaders returns OpenTelemetry trace context headers
 func (m *Message) GetTraceHeaders() map[string]string {
-	if m.Metadata.Headers == nil {
+	if m.TraceHeaders == nil {
 		return make(map[string]string)
 	}
 	
 	traceHeaders := make(map[string]string)
-	for key, value := range m.Metadata.Headers {
+	for key, value := range m.TraceHeaders {
 		// Extract OpenTelemetry headers
 		if key == "traceparent" || key == "tracestate" || key == "baggage" {
 			traceHeaders[key] = value
 		}
 	}
 	return traceHeaders
+}
+
+// GetRoutingKey returns the routing key for message broker (eventType)
+func (m *Message) GetRoutingKey() string {
+	return m.EventType
 }
 
 // ToJSON converts the message to JSON bytes
@@ -83,8 +103,11 @@ func FromJSON(data []byte) (*Message, error) {
 
 // Validate validates the message
 func (m *Message) Validate() error {
-	if m.Topic == "" {
+	if m.EventType == "" {
 		return ErrInvalidTopic
+	}
+	if m.Source == "" {
+		return ErrEmptyData
 	}
 	if m.Data == nil {
 		return ErrEmptyData
@@ -92,19 +115,15 @@ func (m *Message) Validate() error {
 	return nil
 }
 
-// PublishRequest represents an HTTP publish request
-type PublishRequest struct {
-	Topic         string                 `json:"topic"`
-	Data          map[string]interface{} `json:"data"`
-	CorrelationID string                 `json:"correlationId,omitempty"`
-	Priority      int                    `json:"priority,omitempty"`
-}
+// PublishRequest represents an HTTP publish request (AWS EventBridge-style)
+// This is just an alias for Message for HTTP binding
+type PublishRequest = Message
 
 // PublishResponse represents an HTTP publish response
 type PublishResponse struct {
 	Success   bool      `json:"success"`
 	MessageID string    `json:"messageId"`
-	Topic     string    `json:"topic"`
+	EventType string    `json:"eventType"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
