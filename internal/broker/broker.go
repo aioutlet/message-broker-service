@@ -4,6 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/aioutlet/message-broker-service/internal/broker/adapters"
 	"github.com/aioutlet/message-broker-service/internal/config"
 	"github.com/aioutlet/message-broker-service/internal/logger"
@@ -78,9 +83,51 @@ func (m *Manager) Disconnect(ctx context.Context) error {
 	return nil
 }
 
-// Publish publishes a message to the broker
+// Publish publishes a message to the broker with tracing support
 func (m *Manager) Publish(ctx context.Context, message *models.Message) error {
-	return m.broker.Publish(ctx, message)
+	// Create a span for broker publishing operation
+	tracer := otel.Tracer("message-broker-service")
+	ctx, span := tracer.Start(ctx, "broker.publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", m.config.Type),
+			attribute.String("messaging.destination", message.Topic),
+			attribute.String("message.id", message.ID),
+			attribute.String("message.correlation_id", message.CorrelationID),
+			attribute.String("message.source", message.Metadata.Source),
+		),
+	)
+	defer span.End()
+
+	// Log the publish operation
+	m.log.Info("Publishing message to broker",
+		"broker_type", m.config.Type,
+		"topic", message.Topic,
+		"message_id", message.ID,
+		"correlation_id", message.CorrelationID,
+	)
+
+	// Publish using the underlying broker
+	if err := m.broker.Publish(ctx, message); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, fmt.Sprintf("failed to publish message: %v", err))
+		m.log.Error("Failed to publish message",
+			"error", err,
+			"broker_type", m.config.Type,
+			"topic", message.Topic,
+			"message_id", message.ID,
+		)
+		return fmt.Errorf("failed to publish message: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "message published successfully")
+	m.log.Info("Message published successfully",
+		"broker_type", m.config.Type,
+		"topic", message.Topic,
+		"message_id", message.ID,
+	)
+
+	return nil
 }
 
 // Subscribe subscribes to messages from a topic

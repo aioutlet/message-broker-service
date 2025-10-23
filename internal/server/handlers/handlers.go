@@ -5,6 +5,11 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/aioutlet/message-broker-service/internal/broker"
 	"github.com/aioutlet/message-broker-service/internal/config"
@@ -36,6 +41,10 @@ func NewHandler(broker *broker.Manager, cfg *config.Config, log *logger.Logger) 
 // @Success 200 {object} models.HealthResponse
 // @Router /api/v1/health [get]
 func (h *Handler) Health(c *fiber.Ctx) error {
+	// Create a child span for health check
+	_, span := otel.Tracer(h.config.ServiceName).Start(c.UserContext(), "health_check")
+	defer span.End()
+
 	isHealthy := h.broker.IsHealthy()
 	status := "healthy"
 	statusCode := fiber.StatusOK
@@ -43,6 +52,11 @@ func (h *Handler) Health(c *fiber.Ctx) error {
 	if !isHealthy {
 		status = "unhealthy"
 		statusCode = fiber.StatusServiceUnavailable
+		span.SetAttributes(attribute.String("health.status", "unhealthy"))
+		span.SetStatus(codes.Error, "broker unhealthy")
+	} else {
+		span.SetAttributes(attribute.String("health.status", "healthy"))
+		span.SetStatus(codes.Ok, "")
 	}
 
 	return c.Status(statusCode).JSON(models.HealthResponse{
@@ -64,9 +78,17 @@ func (h *Handler) Health(c *fiber.Ctx) error {
 // @Failure 500 {object} models.ErrorResponse
 // @Router /api/v1/publish [post]
 func (h *Handler) Publish(c *fiber.Ctx) error {
+	// Create a child span for message publishing
+	ctx, span := otel.Tracer(h.config.ServiceName).Start(c.UserContext(), "publish_message",
+		trace.WithSpanKind(trace.SpanKindProducer),
+	)
+	defer span.End()
+
 	// Parse request
 	var req models.PublishRequest
 	if err := c.BodyParser(&req); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid request body")
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{
 			Success: false,
 			Error:   "invalid request body",
@@ -74,8 +96,17 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		})
 	}
 
+	// Add request attributes to span
+	span.SetAttributes(
+		attribute.String("message.topic", req.Topic),
+		attribute.String("message.correlation_id", req.CorrelationID),
+		attribute.Int("message.priority", req.Priority),
+		attribute.Int("message.data_size", len(fmt.Sprintf("%v", req.Data))),
+	)
+
 	// Validate request
 	if req.Topic == "" {
+		span.SetStatus(codes.Error, "missing topic")
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{
 			Success: false,
 			Error:   "topic is required",
@@ -84,6 +115,7 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 	}
 
 	if req.Data == nil || len(req.Data) == 0 {
+		span.SetStatus(codes.Error, "missing data")
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{
 			Success: false,
 			Error:   "data is required",
@@ -93,6 +125,7 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 
 	// Get service name from header or use default
 	serviceName := c.Get("X-Service-Name", "unknown")
+	span.SetAttributes(attribute.String("source.service", serviceName))
 
 	// Debug: Log incoming request details  
 	correlationHeader := h.config.Observability.CorrelationIDHeader
@@ -129,9 +162,24 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 		}
 	}
 
-	// Publish message
-	ctx := c.Context()
+	// Inject trace context into message headers for downstream propagation
+	propagator := otel.GetTextMapPropagator()
+	traceHeaders := make(map[string]string)
+	propagator.Inject(ctx, propagation.MapCarrier(traceHeaders))
+	message.SetTraceHeaders(traceHeaders)
+
+	// Add final message attributes to span
+	span.SetAttributes(
+		attribute.String("message.id", message.ID),
+		attribute.String("message.final_correlation_id", message.CorrelationID),
+		attribute.String("message.timestamp", message.Timestamp.Format(time.RFC3339)),
+	)
+
+	// Publish message with trace context
 	if err := h.broker.Publish(ctx, message); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to publish message")
+		
 		h.log.Errorf("Failed to publish message: error=%s | topic=%s | messageId=%s | correlationId=%s",
 			err.Error(),
 			req.Topic,
@@ -145,6 +193,9 @@ func (h *Handler) Publish(c *fiber.Ctx) error {
 			Code:    "PUBLISH_FAILED",
 		})
 	}
+
+	// Mark span as successful
+	span.SetStatus(codes.Ok, "message published successfully")
 
 	h.log.Infof("✅ Message published to broker: messageId=%s | topic=%s | source=%s | correlationId=%s | eventType=%v | dataSize=%d",
 		message.ID,

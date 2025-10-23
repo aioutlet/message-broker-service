@@ -40,6 +40,33 @@ func NewMessage(topic string, data map[string]interface{}, source string) *Messa
 	}
 }
 
+// SetTraceHeaders sets OpenTelemetry trace context headers
+func (m *Message) SetTraceHeaders(traceHeaders map[string]string) {
+	if m.Metadata.Headers == nil {
+		m.Metadata.Headers = make(map[string]string)
+	}
+	
+	for key, value := range traceHeaders {
+		m.Metadata.Headers[key] = value
+	}
+}
+
+// GetTraceHeaders returns OpenTelemetry trace context headers
+func (m *Message) GetTraceHeaders() map[string]string {
+	if m.Metadata.Headers == nil {
+		return make(map[string]string)
+	}
+	
+	traceHeaders := make(map[string]string)
+	for key, value := range m.Metadata.Headers {
+		// Extract OpenTelemetry headers
+		if key == "traceparent" || key == "tracestate" || key == "baggage" {
+			traceHeaders[key] = value
+		}
+	}
+	return traceHeaders
+}
+
 // ToJSON converts the message to JSON bytes
 func (m *Message) ToJSON() ([]byte, error) {
 	return json.Marshal(m)

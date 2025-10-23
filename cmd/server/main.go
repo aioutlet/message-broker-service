@@ -12,6 +12,7 @@ import (
 	"github.com/aioutlet/message-broker-service/internal/health"
 	"github.com/aioutlet/message-broker-service/internal/logger"
 	"github.com/aioutlet/message-broker-service/internal/server"
+	"github.com/aioutlet/message-broker-service/internal/tracing"
 	"github.com/joho/godotenv"
 )
 
@@ -52,7 +53,7 @@ func main() {
 		}
 	}
 
-	// Step 4: Initialize observability (logger)
+	// Step 4: Initialize observability (logger + tracing)
 	fmt.Println("Step 4: Initializing observability...")
 	log, err := logger.New(cfg.Log.Level, cfg.Log.Format)
 	if err != nil {
@@ -60,6 +61,23 @@ func main() {
 		os.Exit(1)
 	}
 	defer log.Sync()
+
+	// Initialize distributed tracing
+	_, err = tracing.InitTracing(cfg, log)
+	if err != nil {
+		log.Error("Failed to initialize tracing", "error", err)
+		// Don't exit - tracing is optional, continue without it
+	} else if cfg.Observability.EnableTracing {
+		log.Info("Distributed tracing initialized successfully")
+		// Ensure tracing is properly shut down
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := tracing.Shutdown(shutdownCtx, log); err != nil {
+				log.Error("Failed to shutdown tracing", "error", err)
+			}
+		}()
+	}
 
 	log.Info("Starting message-broker-service",
 		"version", "1.0.0",

@@ -7,6 +7,11 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/aioutlet/message-broker-service/internal/config"
 	"github.com/aioutlet/message-broker-service/internal/logger"
@@ -118,11 +123,27 @@ func (r *RabbitMQAdapter) Disconnect(ctx context.Context) error {
 	return nil
 }
 
-// Publish publishes a message to RabbitMQ
+// Publish publishes a message to RabbitMQ with distributed tracing support
 func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) error {
+	// Create a span for RabbitMQ publishing
+	tracer := otel.Tracer("message-broker-service.rabbitmq")
+	ctx, span := tracer.Start(ctx, "rabbitmq.publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "rabbitmq"),
+			attribute.String("messaging.destination", message.Topic),
+			attribute.String("messaging.destination_kind", "topic"),
+			attribute.String("messaging.rabbitmq.routing_key", message.Topic),
+			attribute.String("message.id", message.ID),
+			attribute.String("message.correlation_id", message.CorrelationID),
+		),
+	)
+	defer span.End()
+
 	r.mu.RLock()
 	if !r.connected || r.channel == nil {
 		r.mu.RUnlock()
+		span.SetStatus(codes.Error, "broker not connected")
 		return models.ErrBrokerNotConnected
 	}
 	channel := r.channel
@@ -131,17 +152,27 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 	// Validate message
 	if err := message.Validate(); err != nil {
 		r.updateStats(false)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "message validation failed")
 		return err
 	}
+
+	// Inject trace context into message headers for downstream propagation
+	propagator := otel.GetTextMapPropagator()
+	traceHeaders := make(map[string]string)
+	propagator.Inject(ctx, propagation.MapCarrier(traceHeaders))
+	message.SetTraceHeaders(traceHeaders)
 
 	// Convert message to JSON
 	body, err := message.ToJSON()
 	if err != nil {
 		r.updateStats(false)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "message serialization failed")
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
-	// Prepare publishing
+	// Prepare publishing with trace headers
 	publishing := amqp.Publishing{
 		ContentType:  "application/json",
 		Body:         body,
@@ -157,12 +188,15 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 		publishing.CorrelationId = message.CorrelationID
 	}
 
-	// Add custom headers
+	// Add custom headers including trace context
 	for k, v := range message.Metadata.Headers {
 		publishing.Headers[k] = v
 	}
 
-	// Publish with context
+	// Add span attributes for message size
+	span.SetAttributes(attribute.Int("message.body.size", len(body)))
+
+	// Publish with context and tracing
 	err = channel.PublishWithContext(
 		ctx,
 		r.config.Exchange, // exchange
@@ -174,13 +208,24 @@ func (r *RabbitMQAdapter) Publish(ctx context.Context, message *models.Message) 
 
 	if err != nil {
 		r.updateStats(false)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to publish to RabbitMQ")
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
 
+	// Mark span as successful
+	span.SetStatus(codes.Ok, "message published successfully")
+	span.SetAttributes(
+		attribute.String("rabbitmq.exchange", r.config.Exchange),
+		attribute.Bool("message.persistent", true),
+	)
+
 	r.updateStats(true)
-	r.log.Debug("Message published",
+	r.log.Debug("Message published to RabbitMQ",
 		"messageId", message.ID,
 		"topic", message.Topic,
+		"exchange", r.config.Exchange,
+		"correlationId", message.CorrelationID,
 	)
 
 	return nil

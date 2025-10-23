@@ -98,6 +98,13 @@ func setupMiddleware(app *fiber.App, cfg *config.Config, log *logger.Logger) {
 	// Request ID middleware
 	app.Use(requestid.New())
 
+	// Distributed tracing middleware (before logger to include trace context)
+	app.Use(middleware.Tracing(middleware.TracingConfig{
+		ServiceName:         cfg.ServiceName,
+		CorrelationIDHeader: cfg.Observability.CorrelationIDHeader,
+		Enabled:             cfg.Observability.EnableTracing,
+	}, log))
+
 	// Logger middleware
 	app.Use(middleware.Logger(log))
 
