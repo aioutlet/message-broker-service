@@ -92,7 +92,7 @@ type ObservabilityConfig struct {
 // Load loads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
-		ServiceName: getEnv("SERVICE_NAME", "message-broker-service"),
+		ServiceName: getEnv("NAME", "message-broker-service"),
 		Port:        getEnv("PORT", "4000"),
 		Environment: getEnv("ENVIRONMENT", "development"),
 		Broker: BrokerConfig{
@@ -152,7 +152,7 @@ func (c *Config) Validate() error {
 
 	// Validate service name
 	if c.ServiceName == "" {
-		return fmt.Errorf("SERVICE_NAME must be a non-empty string")
+		return fmt.Errorf("NAME must be a non-empty string")
 	}
 
 	// Validate port
